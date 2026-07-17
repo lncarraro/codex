@@ -34,6 +34,14 @@ fn test_windows_1252_smart_decoding() {
 }
 
 #[test]
+fn test_windows_1252_portuguese_source_line() {
+    assert_eq!(
+        decode_shell_output(b"// Informa\xE7\xE3o \x97 Jo\xE3o"),
+        "// Informação — João"
+    );
+}
+
+#[test]
 fn test_smart_decoding_improves_over_lossy_utf8() {
     // Regression guard: String::from_utf8_lossy() alone used to emit replacement chars here.
     let bytes = b"\x93\x94 test \x96 dash";

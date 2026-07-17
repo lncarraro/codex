@@ -420,6 +420,64 @@ fn telemetry_preview_truncates_by_lines() {
 }
 
 #[test]
+fn exec_command_tool_output_decodes_windows_1252_before_returning_it_to_the_model() {
+    let payload = ToolPayload::Function {
+        arguments: "{}".to_string(),
+    };
+    let response = ExecCommandToolOutput {
+        event_call_id: "call-encoding".to_string(),
+        chunk_id: "encoding".to_string(),
+        wall_time: std::time::Duration::from_millis(10),
+        raw_output: b"class Cliente {\n    // Informa\xe7\xe3o \x97 Jo\xe3o\n}\n".to_vec(),
+        truncation_policy: TruncationPolicy::Tokens(10_000),
+        max_output_tokens: None,
+        process_id: None,
+        exit_code: Some(0),
+        original_token_count: None,
+        hook_command: None,
+    }
+    .to_response_item("call-encoding", &payload);
+
+    match response {
+        ResponseInputItem::FunctionCallOutput { output, .. } => {
+            let text = output
+                .body
+                .to_text()
+                .expect("exec output should serialize as text");
+            assert!(text.contains("// Informação — João"), "{text}");
+            assert!(!text.contains('\u{fffd}'), "{text}");
+        }
+        other => panic!("expected FunctionCallOutput, got {other:?}"),
+    }
+}
+
+#[test]
+fn exec_command_code_mode_result_decodes_windows_1252() {
+    let output = ExecCommandToolOutput {
+        event_call_id: "call-encoding".to_string(),
+        chunk_id: "encoding".to_string(),
+        wall_time: std::time::Duration::from_millis(10),
+        raw_output: b"class Cliente {\n    // Informa\xe7\xe3o \x97 Jo\xe3o\n}\n".to_vec(),
+        truncation_policy: TruncationPolicy::Tokens(10_000),
+        max_output_tokens: None,
+        process_id: None,
+        exit_code: Some(0),
+        original_token_count: None,
+        hook_command: None,
+    };
+
+    let result = output.code_mode_result(&ToolPayload::Function {
+        arguments: "{}".to_string(),
+    });
+    let text = result["output"]
+        .as_str()
+        .expect("code-mode exec output should be text");
+
+    assert_eq!(text, "class Cliente {\n    // Informação — João\n}\n");
+    assert!(!text.contains('\u{fffd}'), "{text}");
+}
+
+#[test]
 fn exec_command_tool_output_formats_truncated_response() {
     let payload = ToolPayload::Function {
         arguments: "{}".to_string(),
