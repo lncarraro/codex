@@ -19,10 +19,13 @@ workspace = true
 [dependencies]
 anyhow = { workspace = true }
 codex-exec-server = { workspace = true }
+codex-text-encoding = { workspace = true }
 codex-utils-absolute-path = { workspace = true }
 codex-utils-path-uri = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
 similar = { workspace = true }
 thiserror = { workspace = true }
+toml = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt"] }
 tree-sitter = { workspace = true }
 tree-sitter-bash = { workspace = true }

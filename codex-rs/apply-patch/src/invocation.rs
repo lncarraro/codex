@@ -18,6 +18,7 @@ use crate::MaybeApplyPatchVerified;
 use crate::parser::Hunk;
 use crate::parser::ParseError;
 use crate::parser::parse_patch;
+use crate::text_encoding::ProjectEncodingPolicy;
 use crate::unified_diff_from_chunks;
 use codex_utils_path_uri::PathConvention;
 use codex_utils_path_uri::PathUri;
@@ -194,20 +195,47 @@ async fn try_verify_apply_patch_args(
         .map(|dir| cwd.join(dir))
         .transpose()?
         .unwrap_or_else(|| cwd.clone());
+    let encoding_policy = ProjectEncodingPolicy::load(&effective_cwd, fs, sandbox)
+        .await
+        .map_err(|source| {
+            ApplyPatchError::IoError(IoError {
+                context: "Failed to load project file encoding configuration".to_string(),
+                source,
+            })
+        })?;
     let mut changes = HashMap::new();
     for hunk in hunks {
         let path = hunk.resolve_path(&effective_cwd)?;
         match hunk {
             Hunk::AddFile { contents, .. } => {
+                encoding_policy
+                    .encode_add(&path, &contents, fs, sandbox)
+                    .await
+                    .map_err(|source| {
+                        ApplyPatchError::IoError(IoError {
+                            context: format!(
+                                "Failed to encode {}",
+                                path.inferred_native_path_string()
+                            ),
+                            source,
+                        })
+                    })?;
                 changes.insert(path, ApplyPatchFileChange::Add { content: contents });
             }
             Hunk::DeleteFile { .. } => {
-                let content = fs.read_file_text(&path, sandbox).await.map_err(|source| {
-                    ApplyPatchError::IoError(IoError {
-                        context: format!("Failed to read {}", path.inferred_native_path_string()),
-                        source,
-                    })
-                })?;
+                let content = encoding_policy
+                    .read_text(&path, fs, sandbox)
+                    .await
+                    .map_err(|source| {
+                        ApplyPatchError::IoError(IoError {
+                            context: format!(
+                                "Failed to read {}",
+                                path.inferred_native_path_string()
+                            ),
+                            source,
+                        })
+                    })?
+                    .content;
                 changes.insert(path, ApplyPatchFileChange::Delete { content });
             }
             Hunk::UpdateFile {
@@ -218,6 +246,29 @@ async fn try_verify_apply_patch_args(
                     content: contents,
                     ..
                 } = unified_diff_from_chunks(&path, &chunks, fs, sandbox).await?;
+                let decoded_original = encoding_policy
+                    .read_text(&path, fs, sandbox)
+                    .await
+                    .map_err(|source| {
+                        ApplyPatchError::IoError(IoError {
+                            context: format!(
+                                "Failed to read {}",
+                                path.inferred_native_path_string()
+                            ),
+                            source,
+                        })
+                    })?;
+                encoding_policy
+                    .encode_existing(&path, &decoded_original, &contents)
+                    .map_err(|source| {
+                        ApplyPatchError::IoError(IoError {
+                            context: format!(
+                                "Failed to encode {}",
+                                path.inferred_native_path_string()
+                            ),
+                            source,
+                        })
+                    })?;
                 changes.insert(
                     path,
                     ApplyPatchFileChange::Update {

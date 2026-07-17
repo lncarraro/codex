@@ -8,6 +8,7 @@ use crate::tools::TELEMETRY_PREVIEW_MAX_LINES;
 use crate::tools::TELEMETRY_PREVIEW_TRUNCATION_NOTICE;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::unified_exec::resolve_max_tokens;
+use codex_protocol::exec_output::bytes_to_string_smart;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
@@ -389,7 +390,7 @@ impl ToolOutput for ExecCommandToolOutput {
             original_token_count: self.original_token_count,
             output: match self.max_output_tokens {
                 Some(max_tokens) => self.truncated_output(max_tokens),
-                None => String::from_utf8_lossy(&self.raw_output).to_string(),
+                None => self.decoded_output(),
             },
         };
 
@@ -405,8 +406,12 @@ impl ExecCommandToolOutput {
     }
 
     pub(crate) fn truncated_output(&self, max_tokens: usize) -> String {
-        let text = String::from_utf8_lossy(&self.raw_output).to_string();
+        let text = self.decoded_output();
         formatted_truncate_text(&text, TruncationPolicy::Tokens(max_tokens))
+    }
+
+    fn decoded_output(&self) -> String {
+        bytes_to_string_smart(&self.raw_output)
     }
 
     fn response_text(&self) -> String {

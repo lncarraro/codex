@@ -3,6 +3,11 @@ mod parser;
 mod seek_sequence;
 mod standalone_executable;
 mod streaming_parser;
+mod text_encoding;
+
+#[cfg(test)]
+#[path = "legacy_encoding_tests.rs"]
+mod legacy_encoding_tests;
 
 use std::collections::HashMap;
 use std::io;
@@ -14,6 +19,7 @@ use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::ExecutorFileSystem;
 use codex_exec_server::FileSystemSandboxContext;
 use codex_exec_server::RemoveOptions;
+use codex_text_encoding::DecodedText;
 use codex_utils_path_uri::PathUri;
 use codex_utils_path_uri::PathUriParseError;
 pub use parser::Hunk;
@@ -30,6 +36,7 @@ pub use invocation::verify_apply_patch_args;
 pub use standalone_executable::main;
 
 use crate::invocation::ExtractHeredocError;
+use crate::text_encoding::ProjectEncodingPolicy;
 
 /// Special argv[1] flag used when the Codex executable self-invokes to run the
 /// internal `apply_patch` path.
@@ -369,6 +376,10 @@ async fn apply_hunks_to_files(
         anyhow::bail!("No files were modified.");
     }
 
+    let encoding_policy = ProjectEncodingPolicy::load(cwd, fs, sandbox)
+        .await
+        .context("Failed to load project file encoding configuration")?;
+
     let mut added: Vec<PathBuf> = Vec::new();
     let mut modified: Vec<PathBuf> = Vec::new();
     let mut deleted: Vec<PathBuf> = Vec::new();
@@ -393,17 +404,20 @@ async fn apply_hunks_to_files(
         let path_uri = hunk.resolve_path(cwd)?;
         match hunk {
             Hunk::AddFile { contents, .. } => {
-                let overwritten_content =
-                    read_optional_file_text_for_delta(&path_uri, fs, sandbox, &mut delta.exact)
-                        .await;
+                let overwritten_content = read_optional_file_text_for_delta(
+                    &path_uri,
+                    fs,
+                    sandbox,
+                    &encoding_policy,
+                    &mut delta.exact,
+                )
+                .await;
+                let encoded_contents = encoding_policy
+                    .encode_add(&path_uri, contents, fs, sandbox)
+                    .await?;
                 try_write!(
-                    write_file_with_missing_parent_retry(
-                        fs,
-                        &path_uri,
-                        contents.clone().into_bytes(),
-                        sandbox,
-                    )
-                    .await
+                    write_file_with_missing_parent_retry(fs, &path_uri, encoded_contents, sandbox,)
+                        .await
                 );
                 delta.changes.push(AppliedPatchChange {
                     path: path_uri.to_path_buf(),
@@ -416,7 +430,11 @@ async fn apply_hunks_to_files(
             }
             Hunk::DeleteFile { .. } => {
                 note_existing_path_delta_support(&path_uri, fs, sandbox, &mut delta.exact).await;
-                let deleted_content = fs.read_file_text(&path_uri, sandbox).await.ok();
+                let deleted_content = encoding_policy
+                    .read_text(&path_uri, fs, sandbox)
+                    .await
+                    .ok()
+                    .map(|decoded| decoded.content);
                 if deleted_content.is_none() {
                     delta.exact = false;
                 }
@@ -450,6 +468,7 @@ async fn apply_hunks_to_files(
                         deleted_content.as_deref(),
                         fs,
                         sandbox,
+                        &encoding_policy,
                     )
                     .await;
                     return Err(error);
@@ -469,17 +488,32 @@ async fn apply_hunks_to_files(
                 let AppliedPatch {
                     original_contents,
                     new_contents,
-                } = derive_new_contents_from_chunks(&path_uri, chunks, fs, sandbox).await?;
+                    decoded_original,
+                } = derive_new_contents_from_chunks(
+                    &path_uri,
+                    chunks,
+                    fs,
+                    sandbox,
+                    &encoding_policy,
+                )
+                .await?;
+                let encoded_new_contents =
+                    encoding_policy.encode_existing(&path_uri, &decoded_original, &new_contents)?;
                 if let Some(dest) = move_path {
                     let dest_uri = cwd.join(&dest.to_string_lossy())?;
-                    let overwritten_move_content =
-                        read_optional_file_text_for_delta(&dest_uri, fs, sandbox, &mut delta.exact)
-                            .await;
+                    let overwritten_move_content = read_optional_file_text_for_delta(
+                        &dest_uri,
+                        fs,
+                        sandbox,
+                        &encoding_policy,
+                        &mut delta.exact,
+                    )
+                    .await;
                     try_write!(
                         write_file_with_missing_parent_retry(
                             fs,
                             &dest_uri,
-                            new_contents.clone().into_bytes(),
+                            encoded_new_contents.clone(),
                             sandbox,
                         )
                         .await
@@ -522,6 +556,7 @@ async fn apply_hunks_to_files(
                             Some(&original_contents),
                             fs,
                             sandbox,
+                            &encoding_policy,
                         )
                         .await;
                         return Err(error);
@@ -538,7 +573,7 @@ async fn apply_hunks_to_files(
                     modified.push(affected_path);
                 } else {
                     try_write!(
-                        fs.write_file(&path_uri, new_contents.clone().into_bytes(), sandbox)
+                        fs.write_file(&path_uri, encoded_new_contents, sandbox)
                             .await
                             .with_context(|| format!(
                                 "Failed to write file {}",
@@ -586,12 +621,13 @@ async fn remove_failure_was_side_effect_free(
     expected_content: Option<&str>,
     fs: &dyn ExecutorFileSystem,
     sandbox: Option<&FileSystemSandboxContext>,
+    encoding_policy: &ProjectEncodingPolicy,
 ) -> bool {
     match expected_content {
-        Some(expected_content) => fs
-            .read_file_text(path, sandbox)
+        Some(expected_content) => encoding_policy
+            .read_text(path, fs, sandbox)
             .await
-            .is_ok_and(|content| content == expected_content),
+            .is_ok_and(|decoded| decoded.content == expected_content),
         None => false,
     }
 }
@@ -600,11 +636,12 @@ async fn read_optional_file_text_for_delta(
     path: &PathUri,
     fs: &dyn ExecutorFileSystem,
     sandbox: Option<&FileSystemSandboxContext>,
+    encoding_policy: &ProjectEncodingPolicy,
     exact: &mut bool,
 ) -> Option<String> {
     note_existing_path_delta_support(path, fs, sandbox, exact).await;
-    match fs.read_file_text(path, sandbox).await {
-        Ok(content) => Some(content),
+    match encoding_policy.read_text(path, fs, sandbox).await {
+        Ok(decoded) => Some(decoded.content),
         Err(source) if source.kind() == io::ErrorKind::NotFound => None,
         Err(_) => {
             *exact = false;
@@ -668,6 +705,7 @@ async fn write_file_with_missing_parent_retry(
 struct AppliedPatch {
     original_contents: String,
     new_contents: String,
+    decoded_original: DecodedText,
 }
 
 /// Return *only* the new file contents (joined into a single `String`) after
@@ -677,16 +715,21 @@ async fn derive_new_contents_from_chunks(
     chunks: &[UpdateFileChunk],
     fs: &dyn ExecutorFileSystem,
     sandbox: Option<&FileSystemSandboxContext>,
+    encoding_policy: &ProjectEncodingPolicy,
 ) -> std::result::Result<AppliedPatch, ApplyPatchError> {
-    let original_contents = fs.read_file_text(path, sandbox).await.map_err(|err| {
-        ApplyPatchError::IoError(IoError {
-            context: format!(
-                "Failed to read file to update {}",
-                path.inferred_native_path_string()
-            ),
-            source: err,
-        })
-    })?;
+    let decoded_original = encoding_policy
+        .read_text(path, fs, sandbox)
+        .await
+        .map_err(|err| {
+            ApplyPatchError::IoError(IoError {
+                context: format!(
+                    "Failed to read file to update {}",
+                    path.inferred_native_path_string()
+                ),
+                source: err,
+            })
+        })?;
+    let original_contents = decoded_original.content.clone();
 
     let mut original_lines: Vec<String> = original_contents.split('\n').map(String::from).collect();
 
@@ -707,6 +750,7 @@ async fn derive_new_contents_from_chunks(
     Ok(AppliedPatch {
         original_contents,
         new_contents,
+        decoded_original,
     })
 }
 
@@ -853,10 +897,13 @@ pub async fn unified_diff_from_chunks_with_context(
     fs: &dyn ExecutorFileSystem,
     sandbox: Option<&FileSystemSandboxContext>,
 ) -> std::result::Result<ApplyPatchFileUpdate, ApplyPatchError> {
+    let search_from = path.parent().unwrap_or_else(|| path.clone());
+    let encoding_policy = ProjectEncodingPolicy::load(&search_from, fs, sandbox).await?;
     let AppliedPatch {
         original_contents,
         new_contents,
-    } = derive_new_contents_from_chunks(path, chunks, fs, sandbox).await?;
+        decoded_original: _,
+    } = derive_new_contents_from_chunks(path, chunks, fs, sandbox, &encoding_policy).await?;
     let text_diff = TextDiff::from_lines(&original_contents, &new_contents);
     let unified_diff = text_diff.unified_diff().context_radius(context).to_string();
     Ok(ApplyPatchFileUpdate {

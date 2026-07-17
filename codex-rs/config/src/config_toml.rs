@@ -49,6 +49,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
+use codex_text_encoding::FileEncodingConfig;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path::normalize_for_path_comparison;
 use schemars::JsonSchema;
@@ -469,6 +470,10 @@ pub struct ConfigToml {
     /// config still loads.
     #[serde(default)]
     pub ghost_snapshot: Option<GhostSnapshotToml>,
+
+    /// Encoding rules for editable project text files.
+    #[serde(default)]
+    pub file_encoding: Option<FileEncodingConfig>,
 
     /// Markers used to detect the project root when searching parent
     /// directories for `.codex` folders. Defaults to [".git"] when unset.
@@ -1017,5 +1022,35 @@ mod tests {
         let message = err.to_string();
         assert!(message.contains("TOML list of strings"));
         assert!(message.contains("comma-separated strings are not supported"));
+    }
+
+    #[test]
+    fn file_encoding_config_is_accepted() {
+        let config: ConfigToml = toml::from_str(
+            r#"
+[file_encoding]
+default = "utf-8"
+preserve_existing = true
+strict = true
+
+[[file_encoding.rules]]
+globs = ["src/**/*.java"]
+encoding = "windows-1252"
+"#,
+        )
+        .expect("file encoding config should deserialize");
+
+        let file_encoding = config
+            .file_encoding
+            .expect("file encoding config should be present");
+        assert_eq!(
+            file_encoding.default,
+            codex_text_encoding::TextEncoding::Utf8
+        );
+        assert_eq!(file_encoding.rules.len(), 1);
+        assert_eq!(
+            file_encoding.rules[0].encoding,
+            codex_text_encoding::TextEncoding::Windows1252
+        );
     }
 }
