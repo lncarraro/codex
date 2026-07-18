@@ -14,8 +14,8 @@ fn computes_posix_workspace_relative_paths() {
 
 #[test]
 fn compares_windows_paths_case_insensitively() {
-    let left = PathUri::parse("file:///C:/Workspace/Project/.codex/config.toml")
-        .expect("valid left path");
+    let left =
+        PathUri::parse("file:///C:/Workspace/Project/.codex/config.toml").expect("valid left path");
     let right = PathUri::parse("file:///c:/workspace/project/.CODEX/CONFIG.TOML")
         .expect("valid right path");
 

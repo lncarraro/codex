@@ -909,15 +909,7 @@ pub async fn unified_diff_from_chunks_with_context(
 ) -> std::result::Result<ApplyPatchFileUpdate, ApplyPatchError> {
     let search_from = path.parent().unwrap_or_else(|| path.clone());
     let encoding_policy = ProjectEncodingPolicy::load(&search_from, fs, sandbox).await?;
-    unified_diff_from_chunks_with_policy(
-        path,
-        chunks,
-        context,
-        fs,
-        sandbox,
-        &encoding_policy,
-    )
-    .await
+    unified_diff_from_chunks_with_policy(path, chunks, context, fs, sandbox, &encoding_policy).await
 }
 
 pub(crate) async fn unified_diff_from_chunks_with_policy(

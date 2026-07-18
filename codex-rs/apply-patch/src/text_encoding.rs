@@ -60,12 +60,7 @@ impl ProjectEncodingPolicy {
             let config = match parse_project_config(&config_path, &contents) {
                 Ok(config) => config,
                 Err(error) => {
-                    return Self::repair_policy_or_error(
-                        root,
-                        config_path,
-                        patch_paths,
-                        error,
-                    );
+                    return Self::repair_policy_or_error(root, config_path, patch_paths, error);
                 }
             };
             let Some(file_encoding) = config.file_encoding else {
@@ -74,12 +69,7 @@ impl ProjectEncodingPolicy {
             let policy = match compile_file_encoding(&config_path, file_encoding) {
                 Ok(policy) => policy,
                 Err(error) => {
-                    return Self::repair_policy_or_error(
-                        root,
-                        config_path,
-                        patch_paths,
-                        error,
-                    );
+                    return Self::repair_policy_or_error(root, config_path, patch_paths, error);
                 }
             };
             return Ok(Self {
@@ -197,10 +187,7 @@ fn parse_project_config(path: &PathUri, content: &str) -> io::Result<ProjectConf
     })
 }
 
-fn compile_file_encoding(
-    path: &PathUri,
-    config: FileEncodingConfig,
-) -> io::Result<EncodingPolicy> {
+fn compile_file_encoding(path: &PathUri, config: FileEncodingConfig) -> io::Result<EncodingPolicy> {
     EncodingPolicy::compile(config).map_err(|error| {
         io::Error::new(
             io::ErrorKind::InvalidData,
