@@ -23,6 +23,20 @@ fn defaults_new_files_to_utf8() {
 }
 
 #[test]
+fn rejects_disabled_existing_encoding_preservation() {
+    let error = EncodingPolicy::compile(FileEncodingConfig {
+        preserve_existing: false,
+        ..Default::default()
+    })
+    .expect_err("existing encodings must always be preserved");
+
+    assert!(matches!(
+        error,
+        TextEncodingError::ExistingEncodingPreservationRequired
+    ));
+}
+
+#[test]
 fn last_matching_rule_wins() {
     let policy = EncodingPolicy::compile(FileEncodingConfig {
         rules: vec![

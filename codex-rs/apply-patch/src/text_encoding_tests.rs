@@ -13,6 +13,16 @@ fn computes_posix_workspace_relative_paths() {
 }
 
 #[test]
+fn compares_windows_paths_case_insensitively() {
+    let left = PathUri::parse("file:///C:/Workspace/Project/.codex/config.toml")
+        .expect("valid left path");
+    let right = PathUri::parse("file:///c:/workspace/project/.CODEX/CONFIG.TOML")
+        .expect("valid right path");
+
+    assert!(paths_equal(&left, &right));
+}
+
+#[test]
 fn computes_windows_workspace_relative_paths_case_insensitively() {
     let root = PathUri::parse("file:///C:/Workspace/Project").expect("valid root");
     let path = PathUri::parse("file:///c:/workspace/project/src/Cliente.java").expect("valid path");

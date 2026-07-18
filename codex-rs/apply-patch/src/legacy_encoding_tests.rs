@@ -25,6 +25,11 @@ fn setup_project() -> (tempfile::TempDir, PathUri) {
     (directory, cwd)
 }
 
+async fn verify(cwd: &PathUri, patch: &str) -> MaybeApplyPatchVerified {
+    let args = parse_patch(patch).expect("valid patch");
+    verify_apply_patch_args(args, cwd, LOCAL_FS.as_ref(), /*sandbox*/ None).await
+}
+
 async fn apply(
     cwd: &PathUri,
     patch: &str,
@@ -132,6 +137,89 @@ async fn configured_add_does_not_overwrite_unknown_existing_encoding() {
 
     assert!(result.is_err());
     assert_eq!(fs::read(path).expect("read unchanged source"), original);
+}
+
+#[tokio::test]
+async fn invalid_project_config_can_be_repaired() {
+    let directory = tempdir().expect("temporary project");
+    fs::create_dir_all(directory.path().join(".codex")).expect("create .codex");
+    let path = directory.path().join(".codex/config.toml");
+    let invalid_config =
+        PROJECT_CONFIG.replace("preserve_existing = true", "preserve_existing = false");
+    fs::write(&path, &invalid_config).expect("write invalid project config");
+    let cwd = PathUri::from_host_native_path(directory.path()).expect("absolute project path");
+    let patch = r#"*** Begin Patch
+*** Update File: .codex/config.toml
+@@
+-preserve_existing = false
++preserve_existing = true
+*** End Patch"#;
+
+    assert!(matches!(
+        verify(&cwd, patch).await,
+        MaybeApplyPatchVerified::Body(_)
+    ));
+    apply(&cwd, patch)
+        .await
+        .expect("repair patch should succeed");
+
+    assert_eq!(
+        fs::read_to_string(path).expect("read repaired project config"),
+        PROJECT_CONFIG
+    );
+}
+
+#[tokio::test]
+async fn valid_project_config_cannot_be_made_invalid() {
+    let (directory, cwd) = setup_project();
+    let path = directory.path().join(".codex/config.toml");
+    let patch = r#"*** Begin Patch
+*** Update File: .codex/config.toml
+@@
+-preserve_existing = true
++preserve_existing = false
+*** End Patch"#;
+
+    assert!(matches!(
+        verify(&cwd, patch).await,
+        MaybeApplyPatchVerified::CorrectnessError(_)
+    ));
+    assert!(apply(&cwd, patch).await.is_err());
+    assert_eq!(
+        fs::read_to_string(path).expect("read unchanged project config"),
+        PROJECT_CONFIG
+    );
+}
+
+#[tokio::test]
+async fn invalid_project_config_does_not_allow_other_file_changes() {
+    let directory = tempdir().expect("temporary project");
+    fs::create_dir_all(directory.path().join(".codex")).expect("create .codex");
+    fs::create_dir_all(directory.path().join("src")).expect("create source directory");
+    fs::write(
+        directory.path().join(".codex/config.toml"),
+        PROJECT_CONFIG.replace("preserve_existing = true", "preserve_existing = false"),
+    )
+    .expect("write invalid project config");
+    let source_path = directory.path().join("src/Cliente.java");
+    fs::write(&source_path, "class Cliente {}\n").expect("write source file");
+    let cwd = PathUri::from_host_native_path(directory.path()).expect("absolute project path");
+    let patch = r#"*** Begin Patch
+*** Update File: src/Cliente.java
+@@
+-class Cliente {}
++class ClienteAtualizado {}
+*** End Patch"#;
+
+    assert!(matches!(
+        verify(&cwd, patch).await,
+        MaybeApplyPatchVerified::CorrectnessError(_)
+    ));
+    assert!(apply(&cwd, patch).await.is_err());
+    assert_eq!(
+        fs::read_to_string(source_path).expect("read unchanged source"),
+        "class Cliente {}\n"
+    );
 }
 
 #[tokio::test]
