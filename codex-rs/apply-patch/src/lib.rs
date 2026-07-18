@@ -376,7 +376,11 @@ async fn apply_hunks_to_files(
         anyhow::bail!("No files were modified.");
     }
 
-    let encoding_policy = ProjectEncodingPolicy::load(cwd, fs, sandbox)
+    let patch_paths = hunks
+        .iter()
+        .map(|hunk| hunk.resolve_path(cwd))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let encoding_policy = ProjectEncodingPolicy::load_for_patch(cwd, &patch_paths, fs, sandbox)
         .await
         .context("Failed to load project file encoding configuration")?;
 
@@ -404,6 +408,7 @@ async fn apply_hunks_to_files(
         let path_uri = hunk.resolve_path(cwd)?;
         match hunk {
             Hunk::AddFile { contents, .. } => {
+                ProjectEncodingPolicy::validate_project_config(&path_uri, contents)?;
                 let overwritten_content = read_optional_file_text_for_delta(
                     &path_uri,
                     fs,
@@ -497,10 +502,15 @@ async fn apply_hunks_to_files(
                     &encoding_policy,
                 )
                 .await?;
+                let move_uri = move_path
+                    .as_ref()
+                    .map(|dest| cwd.join(&dest.to_string_lossy()))
+                    .transpose()?;
+                let final_path = move_uri.as_ref().unwrap_or(&path_uri);
+                ProjectEncodingPolicy::validate_project_config(final_path, &new_contents)?;
                 let encoded_new_contents =
                     encoding_policy.encode_existing(&path_uri, &decoded_original, &new_contents)?;
-                if let Some(dest) = move_path {
-                    let dest_uri = cwd.join(&dest.to_string_lossy())?;
+                if let Some(dest_uri) = move_uri {
                     let overwritten_move_content = read_optional_file_text_for_delta(
                         &dest_uri,
                         fs,
@@ -899,11 +909,30 @@ pub async fn unified_diff_from_chunks_with_context(
 ) -> std::result::Result<ApplyPatchFileUpdate, ApplyPatchError> {
     let search_from = path.parent().unwrap_or_else(|| path.clone());
     let encoding_policy = ProjectEncodingPolicy::load(&search_from, fs, sandbox).await?;
+    unified_diff_from_chunks_with_policy(
+        path,
+        chunks,
+        context,
+        fs,
+        sandbox,
+        &encoding_policy,
+    )
+    .await
+}
+
+pub(crate) async fn unified_diff_from_chunks_with_policy(
+    path: &PathUri,
+    chunks: &[UpdateFileChunk],
+    context: usize,
+    fs: &dyn ExecutorFileSystem,
+    sandbox: Option<&FileSystemSandboxContext>,
+    encoding_policy: &ProjectEncodingPolicy,
+) -> std::result::Result<ApplyPatchFileUpdate, ApplyPatchError> {
     let AppliedPatch {
         original_contents,
         new_contents,
         decoded_original: _,
-    } = derive_new_contents_from_chunks(path, chunks, fs, sandbox, &encoding_policy).await?;
+    } = derive_new_contents_from_chunks(path, chunks, fs, sandbox, encoding_policy).await?;
     let text_diff = TextDiff::from_lines(&original_contents, &new_contents);
     let unified_diff = text_diff.unified_diff().context_radius(context).to_string();
     Ok(ApplyPatchFileUpdate {

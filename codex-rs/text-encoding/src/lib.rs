@@ -61,6 +61,7 @@ pub struct FileEncodingConfig {
     #[serde(default)]
     pub default: TextEncoding,
     /// Preserve a recognizable encoding for existing non-ASCII files.
+    /// Disabling preservation is rejected to prevent byte reinterpretation.
     #[serde(default = "default_true")]
     pub preserve_existing: bool,
     /// Reject unrepresentable characters rather than replacing them.
@@ -128,6 +129,9 @@ impl EncodingPolicy {
     pub fn compile(config: FileEncodingConfig) -> Result<Self, TextEncodingError> {
         if !config.strict {
             return Err(TextEncodingError::LossyModeUnsupported);
+        }
+        if !config.preserve_existing {
+            return Err(TextEncodingError::ExistingEncodingPreservationRequired);
         }
 
         let rules = config
@@ -365,6 +369,11 @@ pub enum TextEncodingError {
     /// Rules must contain at least one glob.
     #[error("file encoding rules must contain at least one glob")]
     EmptyRule,
+    /// Reinterpreting existing bytes using a configured encoding could silently corrupt text.
+    #[error(
+        "file_encoding.preserve_existing=false is not supported; existing encodings must be preserved"
+    )]
+    ExistingEncodingPreservationRequired,
     /// Lossy replacement would risk silent source corruption.
     #[error("file_encoding.strict=false is not supported; conversions must be strict")]
     LossyModeUnsupported,

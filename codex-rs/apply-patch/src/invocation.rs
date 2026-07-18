@@ -19,7 +19,7 @@ use crate::parser::Hunk;
 use crate::parser::ParseError;
 use crate::parser::parse_patch;
 use crate::text_encoding::ProjectEncodingPolicy;
-use crate::unified_diff_from_chunks;
+use crate::unified_diff_from_chunks_with_policy;
 use codex_utils_path_uri::PathConvention;
 use codex_utils_path_uri::PathUri;
 use std::str::Utf8Error;
@@ -195,19 +195,35 @@ async fn try_verify_apply_patch_args(
         .map(|dir| cwd.join(dir))
         .transpose()?
         .unwrap_or_else(|| cwd.clone());
-    let encoding_policy = ProjectEncodingPolicy::load(&effective_cwd, fs, sandbox)
-        .await
-        .map_err(|source| {
-            ApplyPatchError::IoError(IoError {
-                context: "Failed to load project file encoding configuration".to_string(),
-                source,
-            })
-        })?;
+    let patch_paths = hunks
+        .iter()
+        .map(|hunk| hunk.resolve_path(&effective_cwd))
+        .collect::<Result<Vec<_>, _>>()?;
+    let encoding_policy =
+        ProjectEncodingPolicy::load_for_patch(&effective_cwd, &patch_paths, fs, sandbox)
+            .await
+            .map_err(|source| {
+                ApplyPatchError::IoError(IoError {
+                    context: "Failed to load project file encoding configuration".to_string(),
+                    source,
+                })
+            })?;
     let mut changes = HashMap::new();
     for hunk in hunks {
         let path = hunk.resolve_path(&effective_cwd)?;
         match hunk {
             Hunk::AddFile { contents, .. } => {
+                ProjectEncodingPolicy::validate_project_config(&path, &contents).map_err(
+                    |source| {
+                        ApplyPatchError::IoError(IoError {
+                            context: format!(
+                                "Failed to validate {}",
+                                path.inferred_native_path_string()
+                            ),
+                            source,
+                        })
+                    },
+                )?;
                 encoding_policy
                     .encode_add(&path, &contents, fs, sandbox)
                     .await
@@ -245,7 +261,15 @@ async fn try_verify_apply_patch_args(
                     unified_diff,
                     content: contents,
                     ..
-                } = unified_diff_from_chunks(&path, &chunks, fs, sandbox).await?;
+                } = unified_diff_from_chunks_with_policy(
+                    &path,
+                    &chunks,
+                    /*context*/ 1,
+                    fs,
+                    sandbox,
+                    &encoding_policy,
+                )
+                .await?;
                 let decoded_original = encoding_policy
                     .read_text(&path, fs, sandbox)
                     .await
@@ -258,6 +282,21 @@ async fn try_verify_apply_patch_args(
                             source,
                         })
                     })?;
+                let move_uri = move_path
+                    .map(|path| effective_cwd.join(&path.to_string_lossy()))
+                    .transpose()?;
+                let final_path = move_uri.as_ref().unwrap_or(&path);
+                ProjectEncodingPolicy::validate_project_config(final_path, &contents).map_err(
+                    |source| {
+                        ApplyPatchError::IoError(IoError {
+                            context: format!(
+                                "Failed to validate {}",
+                                final_path.inferred_native_path_string()
+                            ),
+                            source,
+                        })
+                    },
+                )?;
                 encoding_policy
                     .encode_existing(&path, &decoded_original, &contents)
                     .map_err(|source| {
@@ -273,9 +312,7 @@ async fn try_verify_apply_patch_args(
                     path,
                     ApplyPatchFileChange::Update {
                         unified_diff,
-                        move_path: move_path
-                            .map(|path| effective_cwd.join(&path.to_string_lossy()))
-                            .transpose()?,
+                        move_path: move_uri,
                         new_content: contents,
                     },
                 );
