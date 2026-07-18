@@ -119,6 +119,7 @@ members = [
     "codex-api",
     "state",
     "terminal-detection",
+    "text-encoding",
     "test-binary-support",
     "thread-manager-sample",
     "thread-store",
@@ -233,6 +234,7 @@ codex-skills = { path = "skills" }
 codex-state = { path = "state" }
 codex-stdio-to-uds = { path = "stdio-to-uds" }
 codex-terminal-detection = { path = "terminal-detection" }
+codex-text-encoding = { path = "text-encoding" }
 codex-test-binary-support = { path = "test-binary-support" }
 codex-thread-store = { path = "thread-store" }
 codex-tools = { path = "tools" }

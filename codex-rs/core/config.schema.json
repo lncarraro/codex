@@ -1013,6 +1013,66 @@
       },
       "type": "object"
     },
+    "FileEncodingConfig": {
+      "additionalProperties": false,
+      "description": "Project text encoding configuration.",
+      "properties": {
+        "default": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TextEncoding"
+            }
+          ],
+          "default": "utf-8",
+          "description": "Encoding used when no rule matches. Defaults to UTF-8."
+        },
+        "preserve_existing": {
+          "default": true,
+          "description": "Preserve a recognizable encoding for existing non-ASCII files. Disabling preservation is rejected to prevent byte reinterpretation.",
+          "type": "boolean"
+        },
+        "rules": {
+          "default": [],
+          "description": "Ordered path rules. The last matching rule wins.",
+          "items": {
+            "$ref": "#/definitions/FileEncodingRule"
+          },
+          "type": "array"
+        },
+        "strict": {
+          "default": true,
+          "description": "Reject unrepresentable characters rather than replacing them. Only strict mode is supported.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "FileEncodingRule": {
+      "additionalProperties": false,
+      "description": "One path-based encoding rule.",
+      "properties": {
+        "encoding": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/TextEncoding"
+            }
+          ],
+          "description": "Encoding selected for matching paths."
+        },
+        "globs": {
+          "description": "Workspace-relative glob patterns. When multiple rules match, the last matching rule wins.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "encoding",
+        "globs"
+      ],
+      "type": "object"
+    },
     "FileSystemAccessMode": {
       "description": "Access mode for a filesystem entry.\n\nWhen two equally specific entries target the same path, we compare these by conflict precedence rather than by capability breadth: `deny` beats `write`, and `write` beats `read`.",
       "oneOf": [
@@ -2894,6 +2954,32 @@
         }
       },
       "type": "object"
+    },
+    "TextEncoding": {
+      "description": "A text encoding supported for editable project files.",
+      "oneOf": [
+        {
+          "description": "Unicode UTF-8.",
+          "enum": [
+            "utf-8"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "ISO-8859-1 (Latin-1), interpreted strictly as Unicode U+0000..U+00FF.",
+          "enum": [
+            "iso-8859-1"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Microsoft Windows code page 1252. The `ansi` alias is accepted for compatibility with projects that use that informal label.",
+          "enum": [
+            "windows-1252"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "ThreadStoreToml": {
       "oneOf": [
@@ -5104,6 +5190,15 @@
         }
       ],
       "description": "When `false`, disables feedback collection across Codex product surfaces. Defaults to `true`."
+    },
+    "file_encoding": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/FileEncodingConfig"
+        }
+      ],
+      "default": null,
+      "description": "Encoding rules for editable project text files."
     },
     "file_opener": {
       "allOf": [
